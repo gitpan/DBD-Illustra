@@ -1,0 +1,35 @@
+################################################################################
+#
+#   File name: Changes
+#   Project: DBD::Illustra
+#   Description: Change history
+#
+#   Author: Peter Haworth
+#   Date created: 09/09/1998
+#
+#   sccs version: 1.3    last changed: 09/22/98
+#
+#   Copyright (c) 1998 Institute of Physics Publishing
+#   You may distribute under the terms of the Artistic License,
+#   as distributed with Perl, with the exception that it cannot be placed
+#   on a CD-ROM or similar media for commercial distribution without the
+#   prior approval of the author.
+#
+################################################################################
+
+1998/09/22: 0.02 released
+  Added $dbh->ping support
+  Added more support for metadata @sth->{NULLABLE,PRECISION,SCALE}
+  AutoCommit and commit/rollback supported
+  Added minimal install info to README
+
+1998/09/18: 0.01_002
+  Fixed subsequent select problem (unset ACTIVE on sth when no more rows)
+  Added data_sources method (very cheap and cheerful method)
+  Added a bit of documentation
+
+1998/09/09: 0.01_001
+  Added NAME meta data
+  Only first select returns rows if no $sth->finish
+
+1998/08/12: 0.01 released
