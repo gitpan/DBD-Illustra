@@ -1,0 +1,25 @@
+################################################################################
+#
+#   File name: README
+#   Project: DBD::Illustra
+#   Description: README file
+#
+#   Author: Peter Haworth
+#   Date created: 11/08/1998
+#
+#   sccs version: 1.2    last changed: 08/12/98
+#
+#   Copyright (c) 1998 Institute of Physics Publishing
+#   You may distribute under the terms of the Artistic License,
+#   as distributed with perl, with the exception that it cannot be placed
+#   on a CD-ROM or similar media for commercial distribution without the
+#   prior approval of the author.
+#
+################################################################################
+
+This is the very first (pre-)release of DBD::Illustra. It is nowhere near
+complete yet, but does provide the minimum functionality to be able to
+perform selects and updates, so long as you don't care about metadata.
+
+The main reason for this release is to get some feedback from other driver
+developers to make sure that I'm heading down the right track with this.
