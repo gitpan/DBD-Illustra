@@ -28,11 +28,6 @@ foreach $file ("lib.pl", "t/lib.pl") {
 	last;
     }
 }
-if ($mdriver eq 'Illustra') {
-    # XXX DBD::Illustra doesn't support binding yet
-    print "1..0\n";
-    exit 0;
-}
 
 sub ServerError() {
     my $err = $DBI::errstr;  # Hate -w ...
@@ -66,7 +61,7 @@ while (Testing()) {
     #
     Test($state or ($def = TableDefinition($table,
 					   ["id",   "INTEGER",  4, 0],
-					   ["name", "CHAR",    64, 0]),
+					   ["name", "VARCHAR",    64, 0]),
 		    $dbh->do($def)))
 	   or DbiError($dbh->err, $dbh->errstr);
 

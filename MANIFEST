@@ -5,6 +5,7 @@ Illustra.xs
 MANIFEST
 Makefile.PL
 README
+dbd-illustra.pod
 dbdimp.c
 dbdimp.h
 t/00base.t

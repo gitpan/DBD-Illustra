@@ -7,7 +7,7 @@
 #   Author: Peter Haworth
 #   Date created: 17/07/1998
 #
-#   sccs version: 1.7    last changed: 09/29/98
+#   sccs version: 1.11    last changed: 10/13/99
 #
 #   Copyright (c) 1998 Institute of Physics Publishing
 #   You may distribute under the terms of the Artistic License,
@@ -31,6 +31,7 @@ struct imp_fbh_st{		/* Field buffer */
 
   char *name;			/* Column name */
   int type;			/* Column type */
+  char *type_name;		/* Name of type */
   int nullable;			/* Column is nullable */
   int precision;		/* Column precision */
   int scale;			/* Column scale (0 for undef) */
@@ -55,6 +56,9 @@ struct imp_sth_st{
   int done_desc;		/* columns described yet? */
   imp_fbh_t *fbh;		/* array of column details */
   char *name_data;		/* char buffer for all names */
+  char *pstatement;		/* statement with NULs for placeholders */
+  STRLEN plen;			/* length of statement */
+  SV **params;			/* array of bind parameters */
 };
 
 

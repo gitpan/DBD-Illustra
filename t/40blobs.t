@@ -82,7 +82,7 @@ while (Testing()) {
 	#
 	Test($state or ($def = TableDefinition($table,
 					  ["id",   "INTEGER",      4, 0],
-					  ["name", "BLOB",     $size, 0]),
+					  ["name", "BLOB",  $size, 0]),
 			$dbh->do($def)))
 	       or DbiError($dbh->err, $dbh->errstr);
 

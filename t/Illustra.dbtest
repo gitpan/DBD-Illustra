@@ -7,7 +7,7 @@
 #   Author: Peter Haworth
 #   Date created: 29/09/1998
 #
-#   sccs version: 1.3    last changed: 09/30/98
+#   sccs version: 1.4    last changed: 10/13/99
 #
 #   Copyright (c) 1998 Institute of Physics Publishing
 #   You may distribute under the terms of the Artistic License,
@@ -32,6 +32,8 @@ sub AnsiTypeToDb ($;$) {
 	$ret = $type;
     } elsif ((lc $type) eq 'char') {
 	$ret = "CHAR($size)";
+    } elsif ((lc $type) eq 'varchar') {
+	$ret = "VARCHAR($size)";
     } else {
 	warn "Unknown type $type\n";
 	$ret = $type;

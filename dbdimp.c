@@ -7,7 +7,7 @@
 #   Author: Peter Haworth
 #   Date created: 17/07/1998
 #
-#   sccs version: 1.11    last changed: 09/30/98
+#   sccs version: 1.18    last changed: 10/13/99
 #
 #   Copyright (c) 1998 Institute of Physics Publishing
 #   You may distribute under the terms of the Artistic License,
@@ -227,6 +227,11 @@ int dbd_db_disconnect(SV *dbh,imp_dbh_t *imp_dbh){
   if(dbis->debug>=4)
     fprintf(DBILOGFP,"ill_db_disconnect called\n");
 
+  /* Rollback uncommitted updates */
+  if(!DBIc_has(imp_dbh,DBIcf_AutoCommit)){
+    exec_query(dbh,imp_dbh,"rollback work;");
+  }
+
   /* Tell DBI that we've disconnected */
   DBIc_ACTIVE_off(imp_dbh);
 
@@ -308,6 +313,9 @@ SV *dbd_db_FETCH_attrib(SV *dbh,imp_dbh_t *imp_dbh,SV *keysv){
 
 /* $sth->prepare */
 int dbd_st_prepare(SV *sth,imp_sth_t *imp_sth,char *statement,SV *attribs){
+  int num_params=0,i;
+  char *ptr,*pstatement,last='\0';
+  STRLEN len;
   D_imp_dbh_from_sth;
 
   if(dbis->debug>=4)
@@ -315,9 +323,51 @@ int dbd_st_prepare(SV *sth,imp_sth_t *imp_sth,char *statement,SV *attribs){
 
   imp_sth->done_desc=0;
 
+  /* Parse statement for placeholders */
+  imp_sth->plen=len=strlen(statement);
+  Newz(42,pstatement,len+1,char);
+  strncpy(pstatement,statement,len);
+  ptr=pstatement;
+  while(*ptr){
+    if(*ptr=='-'){
+      if(last=='-'){
+	/* Replace comments with whitespace to make life easier later on */
+	while(*ptr && *ptr!='\n')*ptr++=' ';
+	last=' ';
+      }else{
+	last='-';
+      }
+    }else{
+      switch(last=*ptr){
+      case '\'':
+      case '\"':
+	/* Move to end of string */
+	/* SQL string escapes make this easy */
+	do{ ++ptr; }while(*ptr && *ptr!=last);
+	break;
+      case '?':
+	/* Mark placeholder with NUL */
+	++num_params;
+	*ptr++='\0';
+	break;
+      /* Ignore everything else */
+      }
+    }
+    if(!*ptr++)break;
+  }
+  imp_sth->pstatement=pstatement;
+  if(num_params){
+    New(42,imp_sth->params,num_params,SV*);
+  }else{
+    imp_sth->params=0;
+  }
+  for(i=0;i<num_params;++i){
+    imp_sth->params[i]=&sv_undef;
+  }
+
   /* We don't do anything clever yet, so we don't know how many fields exist */
   DBIc_NUM_FIELDS(imp_sth)=0;
-  DBIc_NUM_PARAMS(imp_sth)=0;
+  DBIc_NUM_PARAMS(imp_sth)=num_params;
 
   /* XXX we might want to do something more sophisticated here */
   DBIc_IMPSET_on(imp_sth);
@@ -325,11 +375,13 @@ int dbd_st_prepare(SV *sth,imp_sth_t *imp_sth,char *statement,SV *attribs){
   return 1;
 }
 
+
 /* $sth->execute */
 int dbd_st_execute(SV *sth,imp_sth_t *imp_sth){
   D_imp_dbh_from_sth;
-  SV **statement;
   mi_integer res;
+  int rows= -3,num_params=0;
+  char *c_statement;
 
   if(dbis->debug>=4)
     fprintf(DBILOGFP,"ill_st_execute called\n");
@@ -337,35 +389,106 @@ int dbd_st_execute(SV *sth,imp_sth_t *imp_sth){
   if(dbis->debug >= 2)
     fprintf(DBILOGFP,"    -> dbd_st_execute for %p\n",sth);
   
-  if(!SvROK(sth) || SvTYPE(SvRV(sth)) != SVt_PVHV)
-    croak("Expected hash array");
-  
-  statement=hv_fetch((HV*)SvRV(sth),"Statement",9,FALSE);
+  /* Build statement */
+  if(num_params=DBIc_NUM_PARAMS(imp_sth)){
+    int i;
+    STRLEN len=imp_sth->plen;
+    char *sptr,*dptr;
+
+    /* Calculate length of string required */
+    for(i=0;i<DBIc_NUM_PARAMS(imp_sth);++i){
+      SV *val=imp_sth->params[i];
+
+      if(SvOK(val)){
+	STRLEN l;
+	char *ptr=SvPV(val,l);
+
+	for(len+=l+2;*ptr;++ptr){
+	  if(*ptr=='\'')++len;
+	}
+      }else{
+	len+=3;
+      }
+    }
+
+    /* Build string */
+    Newz(42,c_statement,len+1,char);
+    for(i=0,sptr=imp_sth->pstatement,dptr=c_statement;i<DBIc_NUM_PARAMS(imp_sth);++i){
+      STRLEN l=strlen(sptr);
+      SV *val=imp_sth->params[i];
+
+      strcpy(dptr,sptr);
+      dptr+=l;
+      sptr+=l+1;
+
+      if(SvOK(val)){
+	char *sptr=SvPV(val,na);
+	*dptr++='\'';
+	while(*sptr){
+	  if((*dptr++=*sptr++)=='\'')*dptr++='\'';
+	}
+	*dptr++='\'';
+      }else{
+	strcpy(dptr,"NULL");
+	dptr+=4;
+      }
+    }
+    if(sptr-imp_sth->pstatement < imp_sth->plen)
+      strcpy(dptr,sptr);
+  }else{
+    c_statement=imp_sth->pstatement;
+  }
 
   /* Make sure there isn't an active query */
   kill_query(imp_dbh);
 
   /* Execute the statement */
-  if(mi_exec(imp_dbh->conn,SvPV(*statement,na),0)){
+  if(mi_exec(imp_dbh->conn,c_statement,0)){
     /* XXX Use useful rc instead of 0 */
     do_error(sth,0,"Can't execute statement");
+    if(num_params){
+      Safefree(c_statement);
+    }
     return -2;
+  }
+  if(num_params){
+    Safefree(c_statement);
   }
 
   /* Initialise the fetch loop */
   DBIc_NUM_FIELDS(imp_sth)=0;
-  while((res=mi_get_result(imp_dbh->conn))!=MI_NO_MORE_RESULTS){
-    if(res==MI_ERROR){
+  while(rows<-2 && (res=mi_get_result(imp_dbh->conn))!=MI_NO_MORE_RESULTS){
+    switch(res){
+    case MI_ERROR:
       /* XXX rc */
       do_error(sth,0,"Error fetching results");
       return -2;
-    }else if(res==MI_ROWS){
+    case MI_ROWS: {
       MI_ROW_DESC *rowdesc=mi_get_row_desc_without_row(imp_dbh->conn);
       if(rowdesc){
 	DBIc_NUM_FIELDS(imp_sth)=mi_column_count(rowdesc);
+	rows= -1;
       }else{
 	do_error(sth,0,"Can't get rowdesc");
+	rows= -2;
       }
+    } break;
+    case MI_DML: {
+      /* DML statement completed. Find number of rows affected */
+      rows=mi_result_row_count(imp_dbh->conn);
+
+      if(rows<0){
+	do_error(sth,0,"Can't get number of rows");
+	rows= -2;
+      }
+    } break;
+    case MI_DDL:
+      /* DDL statement completed. Assume no rows affected */
+      rows=0;
+
+      break;
+    default:
+fprintf(DBILOGFP,"mi_get_result() -> %d\n",res);
       break;
     }
   }
@@ -380,10 +503,11 @@ int dbd_st_execute(SV *sth,imp_sth_t *imp_sth){
       
   DBIc_ACTIVE_on(imp_sth);
   imp_dbh->st_active=imp_sth;
-  return -1;
+
+  return rows<-2 ? -2 : rows;
 }
 
-/* dbd_bind_ph: Used by bind_col */
+/* dbd_bind_ph: Used by bind_param */
 int dbd_bind_ph(SV *sth,imp_sth_t *imp_sth,SV *param,SV *value,IV sql_type,
   SV *attribs,int is_inout,IV maxlen
 ){
@@ -401,8 +525,10 @@ int dbd_bind_ph(SV *sth,imp_sth_t *imp_sth,SV *param,SV *value,IV sql_type,
   if(param_no<1 || param_no > DBIc_NUM_PARAMS(imp_sth))
     croak("Illustra(bind_param): parameter outside range 1..%d",
       DBIc_NUM_PARAMS(imp_sth));
-  
-  /* XXX: Since we don't do binding yet, that'll do for now */
+  SvREFCNT_dec(imp_sth->params[param_no-1]);
+  imp_sth->params[param_no-1]=value;
+  SvREFCNT_inc(value);
+
   return 1;
 }
 
@@ -436,6 +562,8 @@ int dbd_describe(SV *h,imp_sth_t *imp_sth){
     int type=SQL_VARCHAR; /* All types look like varchars */
 
     p=fbh->name=mi_column_name(rowdesc,i);
+    buflen+=strlen(p)+1;
+    p=fbh->type_name=mi_column_type_name(rowdesc,i);
     buflen+=strlen(p)+1;
     fbh->nullable=mi_column_nullable(rowdesc,i);
     fbh->precision=mi_column_bound(rowdesc,i);
@@ -484,6 +612,12 @@ int dbd_describe(SV *h,imp_sth_t *imp_sth){
     Copy(q,p,len,char);
     imp_sth->fbh[i].name=p;
     p+=len+1;
+
+    q=imp_sth->fbh[i].type_name;
+    len=strlen(q);
+    Copy(q,p,len,char);
+    imp_sth->fbh[i].type_name=p;
+    p+=len+1;
   }
 
   imp_sth->name_data=buff;
@@ -507,8 +641,11 @@ AV *dbd_st_fetch(SV *sth,imp_sth_t *imp_sth){
     fprintf(DBILOGFP,"    -> dbd_st_fetch for %p\n",sth);
 
   if(!imp_dbh->st_active){
+warn("dbd_st_fetch() on non-active sth\n");
     return Nullav;
-  }if((row=mi_next_row(imp_dbh->conn,&error))==NULL){
+  }
+
+  if((row=mi_next_row(imp_dbh->conn,&error))==NULL){
     if(error){
       /* XXX rc */
       do_error(sth,0,"Error fetching row");
@@ -520,9 +657,9 @@ AV *dbd_st_fetch(SV *sth,imp_sth_t *imp_sth){
     imp_dbh->st_active=0;
     return Nullav;
   }else{
-    int numfields=DBIc_NUM_FIELDS(imp_sth); /* XXX watch out for ragged rows! */
     int ChopBlanks=DBIc_is(imp_sth,DBIcf_ChopBlanks);
-    int i;
+    int i,numfields=DBIc_NUM_FIELDS(imp_sth); /* XXX watch out for ragged rows! */
+    imp_fbh_t *fbh=imp_sth->fbh;
     av=DBIS->get_fbav(imp_sth);
 
     for(i=0;i<numfields;i++){
@@ -532,8 +669,9 @@ AV *dbd_st_fetch(SV *sth,imp_sth_t *imp_sth){
 
       switch(mi_value(row,i,&colval,&collen)){
       case MI_ERROR:
+      default: /* XXX What other types are there? */
 	/* XXX rc */
-	do_error(sth,0,"Can't fetch column");
+	do_error(sth,0,"Can't fetch column of unknown type");
 	/* fall through */
       case MI_NULL_VALUE:
 	(void)SvOK_off(sv); /* Field is NULL, return undef */
@@ -550,7 +688,6 @@ AV *dbd_st_fetch(SV *sth,imp_sth_t *imp_sth){
 	}
 	sv_setpvn(sv,colval,(STRLEN)collen);
 	break;
-      /* XXX Don't forget large objects */
       }
     }
   }
@@ -558,12 +695,10 @@ AV *dbd_st_fetch(SV *sth,imp_sth_t *imp_sth){
   return av;
 }
 
-/* blob_read */
-int dbd_st_blob_read(SV *sth,imp_sth_t *imp_sth,int field,long offset,
-  long len,SV *destrv,long destoffset
+int dbd_st_blob_read(SV *sth,imp_sth_t *imp_sth,int field,long offset,long len,
+  SV *destrv,long destoffset
 ){
-  /* XXX: One day... */
-  croak("Illustra: blob_read not (yet) implemented - sorry!");
+  die("DBD::Illustra: blob_read not implemented");
   return 0;
 }
 
@@ -598,6 +733,14 @@ void dbd_st_destroy(SV *sth,imp_sth_t *imp_sth){
   if(DBIc_is(imp_sth,DBIcf_ACTIVE))
     dbd_st_finish(sth,imp_sth);
   
+  if(imp_sth->pstatement)Safefree(imp_sth->pstatement);
+  if(imp_sth->params){
+    int i;
+    for(i=0;i<DBIc_NUM_PARAMS(imp_sth);i++){
+      SvREFCNT_dec(imp_sth->params[i]);
+    }
+    Safefree(imp_sth->params);
+  }
   if(imp_sth->done_desc){
     Safefree(imp_sth->fbh);
     Safefree(imp_sth->name_data);
@@ -644,6 +787,11 @@ SV *dbd_st_FETCH_attrib(SV *sth,imp_sth_t *imp_sth,SV *keysv){
     retsv=newRV(sv_2mortal((SV*)av));
     while(--i>=0)
       av_store(av,i,newSViv(imp_sth->fbh[i].type));
+  }else if(kl==12 && strEQ(key,"ill_TypeName")){
+    av=newAV();
+    retsv=newRV(sv_2mortal((SV*)av));
+    while(--i>=0)
+      av_store(av,i,newSVpv(imp_sth->fbh[i].type_name,0));
   }else{
     return Nullsv;
   }

@@ -7,7 +7,7 @@
 #   Author: Peter Haworth
 #   Date created: 11/08/1998
 #
-#   sccs version: 1.7    last changed: 09/30/98
+#   sccs version: 1.9    last changed: 10/13/99
 #
 #   Copyright (c) 1998 Institute of Physics Publishing
 #   You may distribute under the terms of the Artistic License,
@@ -17,14 +17,16 @@
 #
 ################################################################################
 
-This is version 0.03 of DBD::Illustra. It is nowhere near complete yet,
-but provides metadata, and is starting to include more than bare-bones
-functionality.
+This is version 0.04 of DBD::Illustra.
 
-Binding of input parameters is not yet supported because the underlying
-database API does not support it. I hope to work around this at some point.
-
-Blobs are not yet explicity supported
+Changes from version 0.03:
+  * Included dbd-illustra.pod. This is the text describing Illustra from
+    Tim Bunce and Alligator Descartes' book about DBI, although it's not
+    going to be included now, due to Illustra's unpopularity
+  * Support for bind parameters
+  * Support for reading large objects
+  * Return correct number of rows in all cases
+  * Partial $sth->{TYPE} support
 
 INSTALLING
 
@@ -49,5 +51,4 @@ DBD::Illustra uses Jochen Wiedmann's test suite. Before running the test you
 should set the environment variables DBI_DSN, DBI_USER and DBI_PASS to give
 write access to a database on your system.
 DBI_DSN defaults to dbi:Illustra:test
-
 
