@@ -7,7 +7,7 @@
 #   Author: Peter Haworth
 #   Date created: 17/07/1998
 #
-#   sccs version: 1.8    last changed: 09/22/98
+#   sccs version: 1.10    last changed: 09/30/98
 #
 #   Copyright (c) 1998 Institute of Physics Publishing
 #   You may distribute under the terms of the Artistic License,
@@ -32,7 +32,7 @@ use strict;
     $drh
   );
 
-  $VERSION='0.02';
+  $VERSION='0.03';
   @ISA=qw(DynaLoader Exporter);
   bootstrap DBD::Illustra $VERSION;
 
@@ -157,6 +157,27 @@ use strict;
     $sth->finish
       or return 0;
     return 1;
+  }
+
+  # ->table_info
+  # Return statement handle to get available table info
+  sub table_info{
+    my($dbh)=@_;
+
+    my $sth=$dbh->prepare(q(
+      select
+	null::text TABLE_QUALIFIER,
+	table_owner TABLE_OWNER,
+	table_name TABLE_NAME,
+	'TABLE' TABLE_TYPE,
+	null::text REMARKS
+      from tables
+      where not table_issystem
+	and table_kind<>'i';
+    )) or return undef;
+
+    $sth->execute or return undef;
+    $sth;
   }
 }
 

@@ -7,7 +7,7 @@
 #   Author: Peter Haworth
 #   Date created: 17/07/1998
 #
-#   sccs version: 1.9    last changed: 09/22/98
+#   sccs version: 1.11    last changed: 09/30/98
 #
 #   Copyright (c) 1998 Institute of Physics Publishing
 #   You may distribute under the terms of the Artistic License,
@@ -23,16 +23,37 @@
 DBISTATE_DECLARE;
 
 /* Predeclare stuff defined at the bottom */
-static int exec_query(imp_dbh_t *,const char *);
+static int exec_query(SV *,imp_dbh_t *,const char *);
 static void kill_query(imp_dbh_t *);
+
+/* These variables are populated by the call back handler */
+static char sqlcode[6];
+static char errmsg[1024];
+
+/* Store error codes and messages in either handle */
+void do_error(SV* h, int rc, char* what){
+  D_imp_xxh(h);
+  SV* errstr=DBIc_ERRSTR(imp_xxh);
+
+  sv_setiv(DBIc_ERR(imp_xxh),(IV)(rc ? rc : MI_ERROR)); /* set err early */
+  sv_setpv(errstr,errmsg[0] ? errmsg : what);
+  sv_setpv(DBIc_STATE(imp_xxh),sqlcode[0] ? sqlcode : "S1000");
+  DBIh_EVENT2(h,ERROR_event,DBIc_ERR(imp_xxh),errstr);
+
+  if(dbis->debug >= 2){
+    fprintf(DBILOGFP,"%s error %d recorded: %s\n",
+      what,rc,SvPV(errstr,na)
+    );
+  }
+}
 
 /* Callback handler */
 static void MI_PROC_CALLBACK
 all_callback(MI_EVENT_TYPE type,MI_CONNECTION *conn,void *cb_data,void *u_data){
   mi_integer elevel;
   char *levelstr;
-  char sqlcode[6];
-  char errmsg[1024];
+
+  sqlcode[0]=0;
 
   switch(type){
   case MI_Exception:
@@ -52,7 +73,10 @@ all_callback(MI_EVENT_TYPE type,MI_CONNECTION *conn,void *cb_data,void *u_data){
     }
     mi_errmsg(cb_data,errmsg,1024);
     mi_error_sql_code(cb_data,sqlcode,5);
-    Perl_warn("XXX MI_Exception(%s): '%s' %s\n",levelstr,sqlcode,errmsg);
+    if(dbis->debug >= 3)
+      fprintf(DBILOGFP,"DBD::Illustra callback MI_Exception(%s): '%s' %s\n",
+	levelstr,sqlcode,errmsg
+      );
     break;
   case MI_Client_Library_Error:
     /* Internal library error */
@@ -73,19 +97,28 @@ all_callback(MI_EVENT_TYPE type,MI_CONNECTION *conn,void *cb_data,void *u_data){
       levelstr="MI_LIB_DROPCONN";
       break;
     default:
-      levelstr="uknown level";
+      levelstr="unknown level";
     }
     mi_errmsg(cb_data,errmsg,1024);
-    Perl_warn("XXX MI_Client_Library_Error(%s): %s\n",levelstr,errmsg);
+    if(dbis->debug >= 3)
+      fprintf(DBILOGFP,
+	"DBD::Illustra callback MI_Client_Library_Error(%s): %s\n",
+	levelstr,errmsg
+      );
     break;
   case MI_Alerter_Fire_Msg:
     /* Alerter fired or dropped */
     levelstr=mi_alert_status(cb_data)==MI_ALERTER_DROPPED ? "dropped" : "fired";
-    Perl_warn("XXX MI_Alerter_Fire_Msg(%s): %s\n",levelstr,mi_alert_name(cb_data));
+    if(dbis->debug >= 3)
+      fprintf(DBILOGFP,
+	"DBD::Illustra callback MI_Alerter_Fire_Msg(%s): %s\n",
+	levelstr,mi_alert_name(cb_data)
+      );
     break;
   case MI_Xact_State_Change:{
     mi_integer oldlevel,newlevel;
 
+    /* XXX; We might want to do something clever eventually... */
     switch(elevel=mi_xact_state(cb_data)){
     case MI_XACT_BEGIN:
       levelstr="Started";
@@ -100,9 +133,11 @@ all_callback(MI_EVENT_TYPE type,MI_CONNECTION *conn,void *cb_data,void *u_data){
       levelstr="unknown";
     }
     mi_xact_levels(cb_data,&oldlevel,&newlevel);
-    Perl_warn("XXX MI_Xact_State_Change(%s): Old: %d, New: %d\n",
-      levelstr,oldlevel,newlevel
-    );
+    if(dbis->debug >= 3)
+      fprintf(DBILOGFP,
+	"DBD::Illustra callback MI_Xact_State_Change(%s): Old: %d, New: %d\n",
+	levelstr,oldlevel,newlevel
+      );
   } break;
   case MI_Delivery_Status_Msg:
   case MI_Query_Interrupt_Ack:
@@ -151,22 +186,6 @@ int dbd_discon_all(SV* drh,imp_drh_t* imp_drh){
   return FALSE;
 }
 
-/* Store error codes and messages in either handle */
-void do_error(SV* h, int rc, char* what){
-  D_imp_xxh(h);
-  SV* errstr=DBIc_ERRSTR(imp_xxh);
-
-  sv_setiv(DBIc_ERR(imp_xxh),(IV)rc); /* set err early */
-  sv_setpv(errstr,what);
-  DBIh_EVENT2(h,ERROR_event,DBIc_ERR(imp_xxh),errstr);
-
-  if(dbis->debug >= 2){
-    fprintf(DBILOGFP,"%s error %d recorded: %s\n",
-      what,rc,SvPV(errstr,na)
-    );
-  }
-}
-
 /* Connect to a database */
 int dbd_db_login(SV *dbh,imp_dbh_t *imp_dbh,char *dbname,char *uid,char *pwd){
   if(dbis->debug>=4)
@@ -174,6 +193,7 @@ int dbd_db_login(SV *dbh,imp_dbh_t *imp_dbh,char *dbname,char *uid,char *pwd){
 
   /* Connect to database */
   if((imp_dbh->conn=mi_open(dbname,uid,pwd))==NULL){
+    do_error(dbh,0,"Can't connect");
     return FALSE;
   }
 
@@ -191,7 +211,7 @@ int dbd_db_commit(SV *dbh,imp_dbh_t *imp_dbh){
   if(dbis->debug>=2)
     fprintf(DBILOGFP,"DBD::Illustra::dbd_db_commit\n");
 
-  return exec_query(imp_dbh,"commit work;");
+  return exec_query(dbh,imp_dbh,"commit work;");
 }
 
 /* $dbh->rollback */
@@ -199,7 +219,7 @@ int dbd_db_rollback(SV *dbh,imp_dbh_t *imp_dbh){
   if(dbis->debug>=2)
     fprintf(DBILOGFP,"DBD::Illustra::dbd_db_rollback\n");
   
-  return exec_query(imp_dbh,"rollback work;");
+  return exec_query(dbh,imp_dbh,"rollback work;");
 }
 
 /* Disconnect from database */
@@ -253,7 +273,7 @@ int dbd_db_STORE_attrib(SV *dbh,imp_dbh_t *imp_dbh,SV *keysv,SV *valuesv){
     /* There is no API for setting autocommit, so we have to execute */
 
     if(!DBIc_has(imp_dbh,DBIcf_AutoCommit) != !on){
-      exec_query(imp_dbh,on ? "set autocommit on;" : "set autocommit off;");
+      exec_query(dbh,imp_dbh,on ? "set autocommit on;" : "set autocommit off;");
       DBIc_set(imp_dbh,DBIcf_AutoCommit,on);
     }
   }else{
@@ -271,14 +291,20 @@ SV *dbd_db_FETCH_attrib(SV *dbh,imp_dbh_t *imp_dbh,SV *keysv){
   if(dbis->debug>=4)
     fprintf(DBILOGFP,"ill_db_FETCH_attrib called\n");
 
-  if(kl==10 && strEQ(key,"AutoCommit"))
+  if(kl==10 && strEQ(key,"AutoCommit")){
     retsv=boolSV(DBIc_has(imp_dbh,DBIcf_AutoCommit));
+  }else if(kl==10 && strEQ(key,"ChopBlanks")){
+    /* XXX Since we can't tell which fields are "really" fixed width */
+    return Nullsv;
+  }
+
   if(!retsv)
     return Nullsv;
   if(retsv==&sv_undef || retsv==&sv_yes || retsv==&sv_no)
     return retsv;
   return sv_2mortal(retsv);
 }
+
 
 /* $sth->prepare */
 int dbd_st_prepare(SV *sth,imp_sth_t *imp_sth,char *statement,SV *attribs){
@@ -288,6 +314,10 @@ int dbd_st_prepare(SV *sth,imp_sth_t *imp_sth,char *statement,SV *attribs){
     fprintf(DBILOGFP,"ill_st_prepare called\n");
 
   imp_sth->done_desc=0;
+
+  /* We don't do anything clever yet, so we don't know how many fields exist */
+  DBIc_NUM_FIELDS(imp_sth)=0;
+  DBIc_NUM_PARAMS(imp_sth)=0;
 
   /* XXX we might want to do something more sophisticated here */
   DBIc_IMPSET_on(imp_sth);
@@ -331,17 +361,49 @@ int dbd_st_execute(SV *sth,imp_sth_t *imp_sth){
       return -2;
     }else if(res==MI_ROWS){
       MI_ROW_DESC *rowdesc=mi_get_row_desc_without_row(imp_dbh->conn);
-      DBIc_NUM_FIELDS(imp_sth)=mi_column_count(rowdesc);
+      if(rowdesc){
+	DBIc_NUM_FIELDS(imp_sth)=mi_column_count(rowdesc);
+      }else{
+	do_error(sth,0,"Can't get rowdesc");
+      }
       break;
     }
   }
 
-  if(!imp_sth->done_desc)
+  if(!DBIc_NUM_FIELDS(imp_sth)){
+    /* This isn't a select, so pretend to have described the results */
+    imp_sth->done_desc=1;
+  }else if(!imp_sth->done_desc){
+    /* Describe results if not already described */
     dbd_describe(sth,imp_sth);
+  }
       
   DBIc_ACTIVE_on(imp_sth);
   imp_dbh->st_active=imp_sth;
   return -1;
+}
+
+/* dbd_bind_ph: Used by bind_col */
+int dbd_bind_ph(SV *sth,imp_sth_t *imp_sth,SV *param,SV *value,IV sql_type,
+  SV *attribs,int is_inout,IV maxlen
+){
+  int param_no;
+
+  if(SvNIOK(param)){
+    param_no=(int)SvIV(param);
+  }else{
+    croak("bind_param: parameter not a number");
+  }
+
+  if(dbis->debug>=2)
+    fprintf(DBILOGFP,"DBD::Illustra::dbd_bind_ph(%d)\n",param_no);
+  
+  if(param_no<1 || param_no > DBIc_NUM_PARAMS(imp_sth))
+    croak("Illustra(bind_param): parameter outside range 1..%d",
+      DBIc_NUM_PARAMS(imp_sth));
+  
+  /* XXX: Since we don't do binding yet, that'll do for now */
+  return 1;
 }
 
 /* INTERNAL function: Build meta data about select */
@@ -351,7 +413,7 @@ int dbd_describe(SV *h,imp_sth_t *imp_sth){
   int i;
   STRLEN buflen=0;
   char *buff,*p;
-  MI_ROW_DESC *rowdesc=mi_get_row_desc_without_row(imp_dbh->conn);
+  MI_ROW_DESC *rowdesc;
 
   if(dbis->debug>=4)
     fprintf(DBILOGFP,"ill_describe called\n");
@@ -360,16 +422,59 @@ int dbd_describe(SV *h,imp_sth_t *imp_sth){
   if(imp_sth->done_desc)
     return 1;
   
+  if(!(rowdesc=mi_get_row_desc_without_row(imp_dbh->conn))){
+    do_error(h,0,"Can't get rowdesc in dbd_describe");
+    return 0;
+  }
+
   /* Allocate field buffers */
   Newz(42,imp_sth->fbh,num,imp_fbh_t);
   /* Illustra won't tell us how long the column names are, so we
      have to fetch them all first */
   for(i=0;i<num;++i){
-    p=imp_sth->fbh[i].name=mi_column_name(rowdesc,i);
+    imp_fbh_t *fbh=&(imp_sth->fbh[i]);
+    int type=SQL_VARCHAR; /* All types look like varchars */
+
+    p=fbh->name=mi_column_name(rowdesc,i);
     buflen+=strlen(p)+1;
-    imp_sth->fbh[i].nullable=mi_column_nullable(rowdesc,i);
-    imp_sth->fbh[i].precision=mi_column_bound(rowdesc,i);
-    imp_sth->fbh[i].scale=mi_column_parameter(rowdesc,i);
+    fbh->nullable=mi_column_nullable(rowdesc,i);
+    fbh->precision=mi_column_bound(rowdesc,i);
+    fbh->scale=mi_column_parameter(rowdesc,i);
+
+    /* XXX This really is pathetic.
+       Isn't there some way of finding this out properly? */
+    if(mi_column_is_arrayof(rowdesc,i)
+    || mi_column_is_ref(rowdesc,i)
+    || mi_column_is_setof(rowdesc,i)
+    ){
+      /* Leave as SQL_VARCHAR */
+      /* XXX Do stuff with mi_column_subtype_*() */
+    }else if(mi_column_is_composite(rowdesc,i)){
+      /* Leave as SQL_VARCHAR */
+      /* XXX Is anything else possible? */
+    }else{
+      char *type_name=mi_column_type_name(rowdesc,i);
+      if(strEQ(type_name,"char") || strEQ(type_name,"character")){
+	type=SQL_CHAR;
+      }else if(strEQ(type_name,"numeric")){
+	type=SQL_NUMERIC;
+      }else if(strEQ(type_name,"decimal")){
+	type=SQL_DECIMAL;
+      }else if(strEQ(type_name,"int") || strEQ(type_name,"integer")){
+	type=SQL_INTEGER;
+      }else if(strEQ(type_name,"real")){
+	type=SQL_REAL;
+      }else if(strEQ(type_name,"date")){
+	type=SQL_DATE;
+      }else if(strEQ(type_name,"time")){
+	type=SQL_TIME;
+      }else if(strEQ(type_name,"timestamp") || strEQ(type_name,"abstime")){
+	type=SQL_TIMESTAMP;
+      }else if(strEQ(type_name,"vchar") || strEQ(type_name,"varchar")){
+	type=SQL_VARCHAR;
+      }
+    }
+    fbh->type=type;
   }
   Newz(42,buff,buflen,char);
   p=buff;
@@ -408,8 +513,8 @@ AV *dbd_st_fetch(SV *sth,imp_sth_t *imp_sth){
       /* XXX rc */
       do_error(sth,0,"Error fetching row");
     }else{
-      /* XXX check result */
-      mi_query_finish(imp_dbh->conn);
+      if(mi_query_finish(imp_dbh->conn))
+	do_error(sth,0,"Error finishing query");
     }
     DBIc_ACTIVE_off(imp_sth);
     imp_dbh->st_active=0;
@@ -429,6 +534,7 @@ AV *dbd_st_fetch(SV *sth,imp_sth_t *imp_sth){
       case MI_ERROR:
 	/* XXX rc */
 	do_error(sth,0,"Can't fetch column");
+	/* fall through */
       case MI_NULL_VALUE:
 	(void)SvOK_off(sv); /* Field is NULL, return undef */
 	break;
@@ -452,6 +558,15 @@ AV *dbd_st_fetch(SV *sth,imp_sth_t *imp_sth){
   return av;
 }
 
+/* blob_read */
+int dbd_st_blob_read(SV *sth,imp_sth_t *imp_sth,int field,long offset,
+  long len,SV *destrv,long destoffset
+){
+  /* XXX: One day... */
+  croak("Illustra: blob_read not (yet) implemented - sorry!");
+  return 0;
+}
+
 /* $sth->finish */
 int dbd_st_finish(SV *sth,imp_sth_t *imp_sth){
   D_imp_dbh_from_sth;
@@ -461,8 +576,11 @@ int dbd_st_finish(SV *sth,imp_sth_t *imp_sth){
 
   /* Finish the query (but only if it's "ours") */
   if(imp_dbh->conn && imp_dbh->st_active==imp_sth){
-    mi_query_finish(imp_dbh->conn);
     imp_dbh->st_active=0;
+    if(mi_query_finish(imp_dbh->conn)){
+      do_error(sth,0,"Can't finish query");
+      return 0;
+    }
   }
 
   /* Tell DBI that the query is finished */
@@ -495,8 +613,8 @@ SV *dbd_st_FETCH_attrib(SV *sth,imp_sth_t *imp_sth,SV *keysv){
   AV *av;
   SV *retsv=NULL;
 
-  if(dbis->debug>=4)
-    fprintf(DBILOGFP,"ill_st_FETCH_attrib called\n");
+  if(dbis->debug>=3)
+    fprintf(DBILOGFP,"DBD::Illustra::dbd_st_FETCH->{%s}\n",key);
 
   if(kl==4 && strEQ(key,"NAME")){
     av=newAV();
@@ -521,11 +639,28 @@ SV *dbd_st_FETCH_attrib(SV *sth,imp_sth_t *imp_sth,SV *keysv){
 
       av_store(av,i,s ? newSViv(s) : &sv_undef);
     }
+  }else if(kl==4 && strEQ(key,"TYPE")){
+    av=newAV();
+    retsv=newRV(sv_2mortal((SV*)av));
+    while(--i>=0)
+      av_store(av,i,newSViv(imp_sth->fbh[i].type));
   }else{
     return Nullsv;
   }
 
   return sv_2mortal(retsv);
+}
+
+/* $sth->STORE, approximately */
+int dbd_st_STORE_attrib(SV *sth,imp_sth_t *imp_sth,SV *keysv,SV *valuesv){
+  STRLEN kl;
+  char *key=SvPV(keysv,kl);
+
+  if(dbis->debug>=3)
+    fprintf(DBILOGFP,"DBD::Illustra::dbd_st_STORE->{%s}\n",key);
+
+  /* Nothing to store */
+  return 0;
 }
 
 /* INTERNAL function to finish the currently active query if necessary */
@@ -544,7 +679,7 @@ static void kill_query(imp_dbh_t *imp_dbh){
 }
 
 /* Quick and dirty execution of statements */
-static int exec_query(imp_dbh_t *imp_dbh,const char *st){
+static int exec_query(SV *dbh,imp_dbh_t *imp_dbh,const char *st){
   MI_CONNECTION *conn=imp_dbh->conn;
   mi_integer res;
   int ok=1;
@@ -557,15 +692,19 @@ static int exec_query(imp_dbh_t *imp_dbh,const char *st){
 
   /* Execute the statement */
   if(mi_exec(conn,st,0)){
+    do_error(dbh,0,"Can't exec_query");
     return 0;
   }
   while((res=mi_get_result(conn))!=MI_NO_MORE_RESULTS){
     if(res==MI_ERROR){
+      do_error(dbh,0,"Error getting results of exec_query");
       ok=0;
       break;
     }
   }
-  mi_query_finish(conn);
+  if(mi_query_finish(conn) && ok)
+    do_error(dbh,0,"Error finishing query in exec_query");
+
   return ok;
 }
 

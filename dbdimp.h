@@ -7,7 +7,7 @@
 #   Author: Peter Haworth
 #   Date created: 17/07/1998
 #
-#   sccs version: 1.6    last changed: 09/22/98
+#   sccs version: 1.7    last changed: 09/29/98
 #
 #   Copyright (c) 1998 Institute of Physics Publishing
 #   You may distribute under the terms of the Artistic License,
@@ -30,6 +30,7 @@ struct imp_fbh_st{		/* Field buffer */
   imp_sth_t *imp_sth;		/* "Parent" statement */
 
   char *name;			/* Column name */
+  int type;			/* Column type */
   int nullable;			/* Column is nullable */
   int precision;		/* Column precision */
   int scale;			/* Column scale (0 for undef) */
@@ -61,9 +62,7 @@ struct imp_sth_st{
 #define dbd_init		ill_init
 #define dbd_discon_all		ill_discon_all
 #define dbd_describe		ill_describe
-/*
 #define dbd_bind_ph		ill_bind_ph
-*/
 #define dbd_db_login		ill_db_login
 #define dbd_db_do		ill_db_do
 #define dbd_db_commit		ill_db_commit
@@ -85,9 +84,7 @@ struct imp_sth_st{
 #define dbd_st_fetch		ill_st_fetch
 #define dbd_st_finish		ill_st_finish
 #define dbd_st_destroy		ill_st_destroy
-/*
 #define dbd_st_blob_read	ill_st_blob_read
-*/
 #define dbd_st_STORE_attrib	ill_st_STORE_attrib
 #define dbd_st_FETCH_attrib	ill_st_FETCH_attrib
 /*
